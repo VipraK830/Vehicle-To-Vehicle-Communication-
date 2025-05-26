@@ -33,8 +33,7 @@ Features
 - Cloud dashboard (via Blynk)
   
   System Architecture
-
-![V2V System Architecture](Architecture%20diagram.png)
+![Architecture diagram](https://github.com/user-attachments/assets/d792d5f4-3edc-4639-ae0c-d1c3d9307089)
 
 This architecture integrates multiple sensors and modules with a microcontroller for real-time data collection, analysis, and alerts. Data is exchanged via the CAN protocol and sent to the Blynk app via Wi-Fi for remote monitoring. Drowsiness, alcohol, and accidents trigger both in-vehicle and cloud-based alerts.
 
