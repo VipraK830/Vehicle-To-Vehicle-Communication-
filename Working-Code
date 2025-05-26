@@ -1,0 +1,283 @@
+#include <BlynkSimpleEsp32.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <LiquidCrystal_I2C.h>
+#include "I2Cdev.h"
+#include "MPU6050.h"
+#include <TinyGPS++.h>
+TinyGPSPlus gps;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+MFRC522 mfrc522(33, 4);  // RFID: SS_PIN = 33, RST_PIN = 4
+MPU6050 mpu;
+
+float spd;       //Variable  to store the speed
+float sats;      //Variable to store no. of satellites response
+String bearing;  //Variable to store orientation or direction of GPS
+
+float latitude;
+float longitude;
+//unsigned int move_index;         // moving index, to be used later
+unsigned int move_index = 1;       // fixed location for now
+ 
+BlynkTimer timer;
+
+int front_trig = 25;
+int front_echo = 32;
+int back_trig = 26;
+int back_echo = 34;
+
+float front_duration;
+float back_duration;
+long back_distance;
+long front_distance;
+
+int buzzer = 13;
+
+int in1 = 27;
+int en = 14;
+
+const int freq = 30000;  // PWM frequency
+const int pwmChannel = 0; // PWM channel
+const int resolution = 8; // 8-bit resolution (0-255)
+int dutyCycle = 255;      // Default duty cycle
+
+String slowlane = "73 78 11 29";  // Slow lane card UID
+String fastlane = "83 3A ED 28";  // Fast lane card UID
+
+int alcohol = 15;
+int alcoholval;
+int accident = 5;
+int accidentval;
+
+int drowsy = 35;
+int drowsyval;
+
+bool alcoholstatus = false;
+bool accidentstatus = false;
+bool drowsystatus = false;
+
+char ssid[] = "iot";
+char pass[] = "12345678";
+
+void setup() {
+  Serial.begin(9600);
+  Serial2.begin(9600);
+  SPI.begin();
+  mfrc522.PCD_Init();
+  Wire.begin();
+  mpu.initialize();
+
+  lcd.init();
+  lcd.backlight();
+
+  pinMode(alcohol, INPUT);
+  pinMode(buzzer, OUTPUT);
+  pinMode(front_trig, OUTPUT);
+  pinMode(front_echo, INPUT);
+  pinMode(back_trig, OUTPUT);
+  pinMode(back_echo, INPUT);
+  pinMode(drowsy, INPUT);
+  pinMode(accident, INPUT);
+  // Initialize motor control pins
+  pinMode(in1, OUTPUT);
+  pinMode(en, OUTPUT);
+
+  // Set up PWM for motor control
+  ledcSetup(pwmChannel, freq, resolution);
+  ledcAttachPin(en, pwmChannel);
+  ledcWrite(pwmChannel, dutyCycle); // Set default speed
+
+  Serial.println("Connecting to WiFi...");
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting To");
+  lcd.setCursor(0, 1);
+  lcd.print(ssid);
+
+  lcd.clear();
+  lcd.print("Connected");
+  lcd.clear();
+  Serial.println("WiFi Connected.");
+
+  timer.setInterval(1000, check_sensors);
+  timer.setInterval(500, rf);  // Call RFID function every second
+  timer.setInterval(500, detect_rash_driving);
+}
+
+void loop() {
+  timer.run();
+  while (Serial2.available() > 0)
+    {
+     
+      if (gps.encode(Serial2.read()))
+        displayInfo();
+  }
+}
+
+void check_sensors() {
+  digitalWrite(front_trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(front_trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(front_trig, LOW);
+  front_duration = pulseIn(front_echo, HIGH);
+  front_distance = front_duration * 0.034 / 2;
+
+  digitalWrite(back_trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(back_trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(back_trig, LOW);
+  back_duration = pulseIn(back_echo, HIGH);
+  back_distance = back_duration * 0.034 / 2;
+ if (front_distance <= 20 || back_distance <= 20) {
+    anticlock(170); // Slow down motor
+  } else {
+    anticlock(255); // Full speed
+  }
+}
+
+void rf() {
+  if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  String content = "";
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
+    content.concat(String(mfrc522.uid.uidByte[i], HEX));
+  }
+  content.toUpperCase();
+  Serial.println("Card UID: " + content);
+
+  if (content.substring(1) == slowlane) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Slow Lane");
+    digitalWrite(buzzer,HIGH);
+    delay(500);
+    digitalWrite(buzzer,LOW);
+    Serial.println("slow lane");
+   
+  } else if (content.substring(1) == fastlane) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Fast Lane");
+    digitalWrite(buzzer,HIGH);
+    delay(500);
+    digitalWrite(buzzer,LOW);
+    Serial.println("fast lane");
+    }
+}
+
+
+void detect_rash_driving() {
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  int xaxis = map(ax, -17000, 17000, 300, 400);
+  int yaxis = map(ay, -17000, 17000, 100, 200);
+
+  Serial.println("x axis value: " + String(xaxis));
+  Serial.println("y axis value: " + String(yaxis));
+
+  if (xaxis > 380) {
+    Serial.println("bw");
+  }
+
+  if (xaxis < 330) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("RASH DRIVING");
+    Serial.println("fw");
+    anticlock(150);  // Slow down motor when rash driving is detected
+    }
+
+  if (yaxis > 170) {
+    Serial.println("rgt");
+  }
+
+  if (yaxis < 110) {
+    Serial.println("lft");
+  }
+
+  if (xaxis > 330 && xaxis < 380 && yaxis > 110 && yaxis < 170) {
+    Serial.println("stp");
+  }
+
+  alcoholval = digitalRead(alcohol);
+  if (alcoholval == 0 && !alcoholstatus) {
+    alcoholstatus = true;
+    anticlock(150);  // Slow down motor when alcohol is detected
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Alcohol Detected");
+    delay(2000);
+  } else if (alcoholval == 1 && alcoholstatus) {
+    alcoholstatus = false;
+  }
+
+  drowsyval = digitalRead(drowsy);
+  if (drowsyval == 1 && !drowsystatus) {
+    drowsystatus = true;
+    anticlock(150);  // Slow down motor due to drowsiness
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Drowsy Detected");
+    digitalWrite(buzzer, HIGH);
+    delay(2000);
+    digitalWrite(buzzer, LOW);
+   
+  } else if (drowsyval == 0 && drowsystatus) {
+    drowsystatus = false;
+  }
+
+  accidentval = digitalRead(accident);
+  if (accidentval == 0 && !accidentstatus) {
+    accidentstatus = true;
+    stopp();  // Stop motor completely when accident is detected
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Accident Detected");
+    delay(2000);
+  } else if (accidentval == 1 && accidentstatus) {
+    accidentstatus = false;
+  }
+}
+
+
+void anticlock(int speed) {
+  digitalWrite(in1, HIGH);
+  ledcWrite(pwmChannel, speed); // Adjust speed using PWM duty cycle
+}
+
+void stopp() {
+  digitalWrite(in1, LOW);
+  ledcWrite(pwmChannel, 0); // Set PWM duty cycle to 0 to stop the motor
+}
+
+void checkGPS(){
+  if (gps.charsProcessed() < 10)
+  {
+    Serial.println(F("No GPS detected: check wiring."));
+  }
+}
+
+void displayInfo()
+{
+
+  if (gps.location.isValid() )
+  {
+   
+     latitude = (gps.location.lat());     //Storing the Lat. and Lon.
+     longitude = (gps.location.lng());
+   
+    Serial.print("LAT:  ");
+    Serial.println(latitude, 6);  // float to x decimal places
+    Serial.print("LONG: ");
+    Serial.println(longitude, 6);  
+    spd = gps.speed.kmph();               //get speed
+    sats = gps.satellites.value();    //get number of satellites
+    bearing = TinyGPSPlus::cardinal(gps.course.value()); // get the direction
+ 
+  }
+  }
